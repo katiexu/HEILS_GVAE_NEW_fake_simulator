@@ -540,11 +540,15 @@ if __name__ == '__main__':
     # display(result)
     # # result = Scheme_eval(design, task, 'tmp_4', backend='qi',noise=False)
     # # display(result)
-    result = Scheme_eval(design, task, 'tmp_4', backend='qi',noise=True,seed=170,shots=10000,name='kolkata')
-    display(result)
-    result = Scheme_eval(design, task, 'tmp_4', backend='qi', noise=True, seed=170, shots=10000, name='nairobi')
-    display(result)
-
+    # for shots in [1000, 10000]:
+    #     result = Scheme_eval(design, task, 'tmp_4', backend='qi', noise=False, seed=170, shots=shots)
+    #     display(result)
+    # result = Scheme_eval(design, task, 'tmp_4', backend='qi', noise=False, seed=170, shots=10000)
+    # display(result)
+    for name in ['kolkata','nairobi','montreal','toronto','bel','sant']:
+        for shots in [10000, 1000]:
+            result = Scheme_eval(design, task, 'tmp_4', backend='qi',noise=True,seed=170,shots=shots,name=name)
+            display(result)
     # compare_two_models(design=design,weight='tmp_4',task=task,backend1='tq',backend2='qi',noise=True,shots=10000,save_path='two_models_comparison.png')
 
     # torch.save(best_model.state_dict(), 'weights/base_fashion')

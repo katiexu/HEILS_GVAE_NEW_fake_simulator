@@ -11,14 +11,14 @@ import numpy as np
 # Qiskit imports
 from qiskit import QuantumCircuit, transpile
 from qiskit.quantum_info import SparsePauliOp
-from qiskit.providers.fake_provider import GenericBackendV2
+from qiskit.providers.fake_provider import GenericBackendV2, FakeToronto, FakeNairobi
 from qiskit_aer.primitives import Estimator
 from qiskit.circuit import ParameterVector
 from qiskit.quantum_info import SparsePauliOp
-from qiskit.providers.fake_provider import FakeKolkata, FakeNairobi, FakeMontreal, FakeToronto
+from qiskit.providers.fake_provider import FakeKolkata, FakeYorktown, FakeMontreal, FakeBelem, FakeSantiago
 from qiskit_aer.noise import NoiseModel, depolarizing_error, ReadoutError
 from qiskit.primitives import BackendEstimator
-
+from qiskit_aer.primitives import Sampler
 
 # PennyLane imports
 import pennylane as qml
@@ -306,27 +306,34 @@ class EstimatorQiskitLayer(nn.Module):
             fake_backend = FakeMontreal()
         elif 'toronto' in name:
             fake_backend = FakeToronto()
+        elif 'bel' in name:
+            fake_backend = FakeBelem()
+        elif 'sant' in name:
+            fake_backend = FakeSantiago()
         else:
             fake_backend = FakeKolkata()
 
         # 从真实硬件 backend 提取噪声模型
-        self.noise_model = NoiseModel.from_backend(fake_backend)
-        print(f"✅ 已加载 Qiskit 0.46 官方噪声模型: {fake_backend.name()}")
+        if self.args.noise:
+            self.noise_model = NoiseModel.from_backend(fake_backend)
+            print(f"✅ 已加载 Qiskit 0.46 官方噪声模型: {fake_backend.name()}")
+        else:
+            self.noise_model = None
 
     def _init_estimator(self):
-        # self.backend = AerSimulator(
-        #     shots=self.shots,  # 采样次数
-        #     seed_simulator=self.SEED,  # 随机种子
-        #     noise_model=self.noise_model  # 噪声模型（有就传，没有为None）
-        # )
-        self.backend = QasmSimulator(
-            shots=self.shots,  # 采样次数
-            seed_simulator=self.SEED,  # 随机种子
-            noise_model=self.noise_model  # 噪声模型（有就传，没有为None）
-        )
-        self.estimator = BackendEstimator(
-            backend=self.backend,
-            skip_transpilation=False  # 必须开启 transpile
+        self.estimator = Estimator(
+            backend_options={
+                "noise_model": self.noise_model,
+                "shots": self.shots,
+                "seed_simulator": self.SEED,
+                "method": "density_matrix"
+            },
+            transpile_options={
+                "seed_transpiler": self.SEED,
+                "optimization_level": 1,  # 0~3，建议1或2
+                "initial_layout": [0, 1, 2, 3],  # 固定物理比特（核心！）
+                # "routing_method": "sabre"   # 有拓扑时用
+            }
         )
 
     def _build_parametric_circuit(self):
@@ -438,24 +445,14 @@ class EstimatorQiskitLayer(nn.Module):
 
             # Bind parameters and transpile circuit
             qc = self.qc_template.assign_parameters(param_bind)
-            transpiled_qc = transpile(qc, backend=self.backend)
-
+            # transpiled_qc = transpile(qc, backend=self.backend)
             # Calculate expectation values for all observables
             exp_vals = []
             physical_qubit_indices = [0,1,2,3]
-            # for q in range(transpiled_qc.num_qubits):
-            #     try:
-            #         initial_layout = str(transpiled_qc.layout.initial_layout[q])
-            #         index = int(initial_layout.split(', ')[-1].rstrip(')'))
-            #         physical_qubit_indices.append(index)
-            #     except (KeyError, IndexError, ValueError, AttributeError) as e:
-            #         print(f"Warning: Could not extract mapping for physical qubit {q}: {e}")
-
-            # Create Pauli-Z observables based on transpilation mapping (physical_qubit_indices)
             observables = self.create_pauli_observables(physical_qubit_indices)
 
             for obs in observables:
-                job = self.estimator.run(transpiled_qc, obs)
+                job = self.estimator.run(qc, obs)
                 res = job.result()
                 exp_vals.append(res.values[0])
 
@@ -466,6 +463,7 @@ class EstimatorQiskitLayer(nn.Module):
         # Convert results to PyTorch tensor
         output = torch.tensor(batch_results, dtype=torch.float32, device=device)
         return output
+
 
 
 # -------------------------------------------------------------------------------------
@@ -556,5 +554,5 @@ class QNet(nn.Module):
     def forward(self, x_image, n_qubits, task_name):
         # exp_val = self.QuantumLayer(x_image, n_qubits, task_name)
         output = self.QuantumLayer(x_image)
-        # output = F.log_softmax(output, dim=1)
+        output = F.log_softmax(output, dim=1)
         return output
