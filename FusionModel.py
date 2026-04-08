@@ -277,14 +277,14 @@ class EstimatorQiskitLayer(nn.Module):
         super().__init__()
         self.args = arguments
         self.design = design
-        self.n_wires = self.args.n_qubits
+        self.n_qubits = self.args.n_qubits
         self.n_layers = self.args.n_layers
         self.shots = self.args.shots
         self.SEED=arguments.qiskit_seed
 
         # Trainable parameters with identical structure to other layers
-        self.q_params_rot = nn.Parameter(pi * torch.rand(self.n_layers, self.n_wires, 3), requires_grad=True)
-        self.q_params_enta = nn.Parameter(pi * torch.rand(self.n_layers, self.n_wires, 3), requires_grad=True)
+        self.q_params_rot = nn.Parameter(pi * torch.rand(self.n_layers, self.n_qubits, 3), requires_grad=True)
+        self.q_params_enta = nn.Parameter(pi * torch.rand(self.n_layers, self.n_qubits, 3), requires_grad=True)
 
         # Reuse original circuit construction logic to ensure consistent structure
         self.qc_template, self.data_params, self.u3_param_map, self.cu3_param_map = self._build_parametric_circuit()
@@ -331,19 +331,19 @@ class EstimatorQiskitLayer(nn.Module):
             transpile_options={
                 "seed_transpiler": self.SEED,
                 "optimization_level": 1,  # 0~3，建议1或2
-                "initial_layout": [0, 1, 2, 3],  # 固定物理比特（核心！）
-                # "routing_method": "sabre"   # 有拓扑时用
+                "initial_layout": list(range(self.n_qubits)),  # 固定物理比特（核心！）
+                "routing_method": "sabre"   # 有拓扑时用
             }
         )
 
     def _build_parametric_circuit(self):
         """Construct parametric quantum circuit with consistent structure"""
-        qc = QuantumCircuit(self.n_wires)
+        qc = QuantumCircuit(self.n_qubits)
         data_params = []
         u3_param_map = {}
         cu3_param_map = {}
 
-        for j in range(self.n_wires):
+        for j in range(self.n_qubits):
             qubit_data_params = ParameterVector(f'data_q{j}', length=4)
             data_params.append(qubit_data_params)
 
@@ -379,8 +379,8 @@ class EstimatorQiskitLayer(nn.Module):
     def _prebuild_observables(self):
         """Pre-build Pauli observables for expectation value calculation"""
         observables = []
-        for q in range(self.n_wires):
-            pauli_str = 'I' * q + 'Z' + 'I' * (self.n_wires - q - 1)
+        for q in range(self.n_qubits):
+            pauli_str = 'I' * q + 'Z' + 'I' * (self.n_qubits - q - 1)
             observable = SparsePauliOp.from_list([(pauli_str, 1.0)])
             observables.append(observable)
         return observables
@@ -399,7 +399,7 @@ class EstimatorQiskitLayer(nn.Module):
             else:
                 x = x.view(bsz, 4, 4).transpose(1, 2)
         else:
-            x = x.view(bsz, self.n_wires, -1)
+            x = x.view(bsz, self.n_qubits, -1)
         return x
 
     def create_pauli_observables(self, physical_qubit_indices):
@@ -412,10 +412,13 @@ class EstimatorQiskitLayer(nn.Module):
             - Logical qubit 3 maps to physical qubit 2 -> 'IIZI'
         """
         observables = []
+        total_qubits = len(physical_qubit_indices)
 
-        # Create observable for each physical qubit
         for i, physical_qubit_idx in enumerate(physical_qubit_indices):
-            pauli_str = (len(physical_qubit_indices) - 1 - physical_qubit_idx) * 'I' + 'Z' + physical_qubit_idx * 'I'
+            # 正确、通用、支持任意比特数的写法
+            pauli_list = ['I'] * total_qubits
+            pauli_list[physical_qubit_idx] = 'Z'
+            pauli_str = ''.join(pauli_list)
             observable = SparsePauliOp.from_list([(pauli_str, 1.0)])
             observables.append(observable)
 
@@ -436,7 +439,7 @@ class EstimatorQiskitLayer(nn.Module):
         for batch_idx in tqdm(range(bsz), desc="Running Estimator"):
             # Build parameter binding dictionary
             param_bind = {}
-            for j in range(self.n_wires):
+            for j in range(self.n_qubits):
                 param_bind[self.data_params[j]] = x_np[batch_idx, j]
             for (layer, q), params in self.u3_param_map.items():
                 param_bind[params] = u3_np[layer, q]
@@ -448,16 +451,17 @@ class EstimatorQiskitLayer(nn.Module):
             # transpiled_qc = transpile(qc, backend=self.backend)
             # Calculate expectation values for all observables
             exp_vals = []
-            physical_qubit_indices = [0,1,2,3]
+            physical_qubit_indices = list(range(self.n_qubits))
             observables = self.create_pauli_observables(physical_qubit_indices)
-
+            if self.args.task.startswith('QML'):
+                observables = observables[-2:]
             for obs in observables:
                 job = self.estimator.run(qc, obs)
                 res = job.result()
                 exp_vals.append(res.values[0])
 
             # Reverse order to match original code output
-            # exp_vals = exp_vals[::-1]
+            exp_vals = exp_vals[::-1]
             batch_results.append(exp_vals)
 
         # Convert results to PyTorch tensor
@@ -556,3 +560,107 @@ class QNet(nn.Module):
         output = self.QuantumLayer(x_image)
         output = F.log_softmax(output, dim=1)
         return output
+
+def init_Noisemodel():
+    """
+    手动构建 FakeToronto 噪声模型（仅4 qubit：0,1,2,3）
+    并输出所有噪声数值
+    只使用你提供的库，无额外依赖
+    """
+
+    fake_toronto = FakeToronto()
+    props = fake_toronto.properties()
+
+    used_qubits = [0, 1, 2, 3]
+    noise_model = NoiseModel()
+
+    print("=" * 70)
+    print(" 从 FakeToronto 自动读取所有噪声 → 手动构建 NoiseModel")
+    print("=" * 70)
+
+    # -------------------------------------------------------------------------
+    # 1. 读出误差 Readout Error
+    # -------------------------------------------------------------------------
+    print("\n[1/4] 读出噪声 Readout Error")
+    for q in used_qubits:
+        p01 = props.qubit_property(q)['prob_meas0_prep1'][0]
+        p10 = props.qubit_property(q)['prob_meas1_prep0'][0]
+        re_matrix = [[1 - p01, p01], [p10, 1 - p10]]
+        re = ReadoutError(re_matrix)
+        noise_model.add_readout_error(re, qubits=[q])
+        print(f"  qubit {q}: {re_matrix}")
+
+    # -------------------------------------------------------------------------
+    # 2. 单量子门错误（只加 一 次！）
+    # -------------------------------------------------------------------------
+    print("\n[2/4] 单量子门错误")
+    from qiskit_aer.noise import thermal_relaxation_error
+
+    single_gates = ['id', 'sx', 'x', 'rz']
+    for q in used_qubits:
+        print(f"  qubit {q}:")
+
+        # 正确读取 T1 / T2
+        t1 = props.t1(q)
+        t2 = props.t2(q)
+
+        for g in single_gates:
+            err = props.gate_error(g, q)
+            length = props.gate_length(g, q)
+
+            depol_err = depolarizing_error(err, 1)
+            relax_err = thermal_relaxation_error(t1, t2, length)
+            total_err = depol_err.compose(relax_err)
+            noise_model.add_quantum_error(total_err, g, [q])
+
+            print(f"      {g:<3s}: err={err:.8f}, T1={t1:.8f} T2={t2:.8f} length={length}")
+
+    # -------------------------------------------------------------------------
+    # 3. CX 门错误
+    # -------------------------------------------------------------------------
+    print("\n[3/4] CX 门错误")
+    cx_pairs = [(0, 1), (1, 0), (1, 2), (2, 1), (2, 3), (3, 2)]
+    for pair in cx_pairs:
+        qc, qt = pair
+        err = props.gate_error('cx', pair)
+        length = props.gate_length('cx', pair)
+        print(f'pair: {pair} cx: {length}  error: {err:.8f}')
+
+        t1_c = props.t1(qc)
+        t2_c = props.t2(qc)
+        t1_t = props.t1(qt)
+        t2_t = props.t2(qt)
+
+        # 双比特弛豫噪声
+        relax_qc = thermal_relaxation_error(t1_c, t2_c, length)
+        relax_qt = thermal_relaxation_error(t1_t, t2_t, length)
+        relax_total = relax_qc.expand(relax_qt)
+
+
+        # 双比特去极化
+        depol_total = depolarizing_error(err, 2)
+
+        # 合并
+        total_err = depol_total.compose(relax_total)
+        noise_model.add_quantum_error(total_err, 'cx', pair)
+
+    # -------------------------------------------------------------------------
+    # 基础门
+    # -------------------------------------------------------------------------
+    noise_model.add_basis_gates(['id', 'rz', 'sx', 'x', 'cx'])
+
+    print("✅ 成功构建 4 比特 FakeToronto 等效噪声模型")
+
+
+if __name__ == "__main__":
+    backend = FakeToronto()
+    # 看全部耦合（27比特）
+    print("Full coupling map (edges):")
+    print(backend.configuration().coupling_map)
+
+    # 只看你用的 0,1,2,3 子图
+    full_cmap = backend.configuration().coupling_map
+    used = {0, 1, 2, 3}
+    subedges = [(u, v) for u, v in full_cmap if u in used and v in used]
+    print("\nSubset edges [0,1,2,3]:")
+    print(sorted(subedges))

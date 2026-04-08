@@ -99,7 +99,7 @@ def Scheme_eval(design, task, weight, backend, noise=None,seed=170,shots=10000,n
     args.qiskit_seed=seed
     args.shots = shots
     args.name=name
-    path = 'weights/'  
+    # path = 'weights/'  
     if task['task'].startswith('QML'):
         dataloader = qml_Dataloaders(args)
     else:
@@ -107,7 +107,7 @@ def Scheme_eval(design, task, weight, backend, noise=None,seed=170,shots=10000,n
    
     train_loader, val_loader, test_loader = dataloader
     model = QNet(args, design).to(args.device)
-    model.load_state_dict(torch.load(path+weight), strict= False)
+    model.load_state_dict(torch.load(weight), strict= False)
     result['acc'] = evaluate(model, test_loader, args)
     return result
 
@@ -134,7 +134,7 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
     model = QNet(args, design).to(args.device)
     if weight != 'init':
         if weight != 'base':
-            model.load_state_dict(weight, strict= False)
+            model.load_state_dict(torch.load(weight), strict= False)
         else:            
             model.load_state_dict(torch.load('init_weights/base_fashion'))
     criterion = nn.NLLLoss()
@@ -500,23 +500,23 @@ if __name__ == '__main__':
     # 'fold': 2
     # }
 
-    task = {
-    'task': 'MNIST_4',
-    'option': 'mix_reg',
-    'n_qubits': 4,
-    'n_layers': 4,
-    'fold': 1
-    }
-
     # task = {
-    # 'task': 'QML_Hidden_80d',
-    # 'n_qubits': 20,
-    # 'n_layers': 4,
-    # 'fold': 5,
+    # 'task': 'MNIST_4',
     # 'option': 'mix_reg',
-    # 'regular': True,
-    # 'num_processes': 2
+    # 'n_qubits': 4,
+    # 'n_layers': 4,
+    # 'fold': 1
     # }
+
+    task = {
+    'task': 'QML_Hidden_48d',
+    'n_qubits': 12,
+    'n_layers': 4,
+    'fold': 4,
+    'option': 'mix_reg',
+    'regular': True,
+    'num_processes': 2
+    }
     
     arch_code = [task['n_qubits'], task['n_layers']]
     args = Arguments(**task)
@@ -536,23 +536,19 @@ if __name__ == '__main__':
     # best_model, report = Scheme(design, task, 'init', 1, verbs=False, save=False)
     # torch.save(best_model.state_dict(), 'weights/tmp')
    
-    # result = Scheme_eval(design, task, 'tmp_4', backend='tq')
+    # result = Scheme_eval(design, task, 'init_weights/init_weight_QML_Hidden_48d', backend='tq')
     # display(result)
     # # result = Scheme_eval(design, task, 'tmp_4', backend='qi',noise=False)
     # # display(result)
-    # for shots in [1000, 10000]:
-    #     result = Scheme_eval(design, task, 'tmp_4', backend='qi', noise=False, seed=170, shots=shots)
-    #     display(result)
-    # result = Scheme_eval(design, task, 'tmp_4', backend='qi', noise=False, seed=170, shots=10000)
-    # display(result)
-    # for name in ['kolkata','nairobi','montreal','toronto','bel','sant']:
-    result = Scheme_eval(design, task, 'tmp_4', backend='qi', noise=False, seed=170, shots=10000, name='toronto')
+    result = Scheme_eval(design, task, 'init_weights/init_weight_QML_Hidden_48d', backend='qi', noise=False, seed=170,
+                         shots=10000, name='kolkata')
     display(result)
-    for shots in [10000, 1000]:
-        for name in ['toronto','kolkata','bel','sant']:
-            result = Scheme_eval(design, task, 'tmp_4', backend='qi',noise=True,seed=170,shots=shots,name=name)
-            display(result)
-
-    # compare_two_models(design=design,weight='tmp_4',task=task,backend1='tq',backend2='qi',noise=True,shots=10000,save_path='two_models_comparison.png')
+    result = Scheme_eval(design, task, 'init_weights/init_weight_QML_Hidden_48d', backend='qi',noise=True,seed=170,shots=10000,name='kolkata')
+    display(result)
+    result = Scheme_eval(design, task, 'init_weights/init_weight_QML_Hidden_48d', backend='qi', noise=True, seed=170,
+                         shots=10000, name='toronto')
+    display(result)
+    # result = Scheme_eval(design, task, 'tmp_4', backend='qi', noise=True, seed=170, shots=100, name='heron_r1')
+    # display(result)
 
     # torch.save(best_model.state_dict(), 'weights/base_fashion')
